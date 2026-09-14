@@ -29,6 +29,8 @@ available_layers=(rounded flat compact transparent)
 note() { printf 'omacord: %s\n' "$1"; }
 warn() { printf 'omacord: %s\n' "$1" >&2; }
 
+changed=0
+
 # Copy a file aside before overwriting it. The names omacord writes are few
 # and do not collide, so a flat directory per run is enough to undo one.
 snapshot() {
@@ -36,6 +38,18 @@ snapshot() {
   [[ -e $target || -L $target ]] || return 0
   mkdir -p "$backup_root"
   cp -a -- "$target" "$backup_root/${target##*/}" 2>/dev/null || true
+}
+
+# Install only when content or mode would actually change, so a no-change
+# startup run leaves everything (including the theme) untouched.
+install_if_changed() {
+  local mode=$1 src=$2 dst=$3
+  if [[ -f $dst ]] && cmp -s -- "$src" "$dst" && [[ $(stat -c %a -- "$dst") == "$mode" ]]; then
+    return 0
+  fi
+  snapshot "$dst"
+  install -m "$mode" -- "$src" "$dst"
+  changed=1
 }
 
 # Print the layers to apply, one per line. Fails on an unknown name rather
@@ -73,12 +87,11 @@ layers=()
 # ------------------------------------------------------------------ omarchy
 mkdir -p "$hooks" "$templates" "$OMACORD_DATA"
 
-snapshot "$templates/omacord.palette.css.tpl"
-install -m 644 "$here/assets/omarchy/omacord.palette.css.tpl" \
+install_if_changed 644 "$here/assets/omarchy/omacord.palette.css.tpl" \
   "$templates/omacord.palette.css.tpl"
 
-install -m 644 "$here/omarchy/lib.sh" "$OMACORD_DATA/lib.sh"
-install -m 755 "$here/omarchy/theme-set-hook" "$hooks/omacord"
+install_if_changed 644 "$here/omarchy/lib.sh" "$OMACORD_DATA/lib.sh"
+install_if_changed 755 "$here/omarchy/theme-set-hook" "$hooks/omacord"
 
 # Flatten the stylesheet now so that applying a theme is two file reads and a
 # write, rather than a directory walk.
@@ -89,7 +102,13 @@ install -m 755 "$here/omarchy/theme-set-hook" "$hooks/omacord"
     cat "$here/assets/discord/layers/$layer.css"
   done
 } >"$OMACORD_DATA/style.css.partial"
-mv -f "$OMACORD_DATA/style.css.partial" "$OMACORD_DATA/style.css"
+if ! cmp -s -- "$OMACORD_DATA/style.css.partial" "$OMACORD_DATA/style.css" 2>/dev/null; then
+  snapshot "$OMACORD_DATA/style.css"
+  mv -f "$OMACORD_DATA/style.css.partial" "$OMACORD_DATA/style.css"
+  changed=1
+else
+  rm -f "$OMACORD_DATA/style.css.partial"
+fi
 
 # ------------------------------------------------------------------ clients
 # Add omacord to the client's enabled theme list. Vencord serves that list
@@ -117,6 +136,7 @@ enable_in() {
     "$settings" >"$staged" 2>/dev/null; then
     mv -f "$staged" "$settings"
     note "turned on in $settings"
+    changed=1
   else
     rm -f "$staged"
     warn "could not edit $settings; turn omacord on under Settings > Themes"
@@ -140,11 +160,16 @@ done
 
 # ------------------------------------------------------------------- render
 # Refreshing re-renders the palette and runs the hook, which is what puts the
-# stylesheet in front of the client.
-if command -v omarchy >/dev/null 2>&1; then
-  omarchy theme refresh >/dev/null 2>&1 || warn "'omarchy theme refresh' failed, run it yourself"
-else
-  warn "omarchy is not on PATH, run 'omarchy theme refresh' once it is"
+# stylesheet in front of the client. Only when this run changed something:
+# 'omarchy theme refresh' re-applies the whole system theme, and Omarchy
+# restarts clients (OpenCode among them) on every theme apply, so refreshing
+# on a no-change startup run interrupts work for nothing.
+if (( changed )); then
+  if command -v omarchy >/dev/null 2>&1; then
+    omarchy theme refresh >/dev/null 2>&1 || warn "'omarchy theme refresh' failed, run it yourself"
+  else
+    warn "omarchy is not on PATH, run 'omarchy theme refresh' once it is"
+  fi
 fi
 
 if (( ${#layers[@]} )); then
