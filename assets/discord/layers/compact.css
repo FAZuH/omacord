@@ -6,12 +6,21 @@
   margin-top: 2px !important;
 }
 
-[class*="channel_"] [class*="link_"] {
+/* Keep the row tightening inside the channels sidebar; the bare
+   channel/link pair also matches surfaces the visual refresh sizes
+   itself, and 30px fights their measured minimum. */
+[class*="sidebar"] [class*="channel_"] [class*="link_"] {
   height: 30px !important;
 }
 
+/* Channel-row pitch. Guild-rail listItems are JS-computed translate3d
+   positions, so their margin has to stay at zero. */
 [class*="listItem_"] {
   margin-top: 4px !important;
+}
+
+[class*="guilds"] [class*="listItem_"] {
+  margin-top: 0 !important;
 }
 
 [class*="container_"][class*="panels_"] {
